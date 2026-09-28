@@ -1,0 +1,8 @@
+.git
+bin
+build
+coverage.out
+coverage.html
+README.md
+docs
+*.md

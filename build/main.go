@@ -1,0 +1,102 @@
+// Build is the automation pipeline for the my-project repository.
+// This is a case study of a build & deploy pipeline expressed in Go
+// with goyek instead of Make, Mage, or a YAML-based tool.
+package main
+
+import (
+	"flag"
+	"fmt"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/goyek/goyek/v3"
+	"github.com/goyek/goyek/v3/middleware"
+)
+
+// Directories used in repository.
+const (
+	dirRoot  = "."
+	dirBuild = "build"
+)
+
+const exitCodeInvalid = 2
+
+// Reusable flags used by the build pipeline.
+var (
+	v       = flag.Bool("v", false, "print all tasks and tests as they are run")
+	dryRun  = flag.Bool("dry-run", false, "print all tasks that would be run without running them")
+	longRun = flag.Duration("long-run", time.Minute, "print when a task takes longer")
+	noDeps  = flag.Bool("no-deps", false, "do not process dependencies")
+	skip    = flag.String("skip", "", "skip processing the `comma-separated tasks`")
+
+	version  = flag.String("version", "", "release version to tag, e.g. v1.2.3")
+	registry = flag.String("registry", "ghcr.io/rifkiandriyanto/go-build-deploy-pipeline", "container image name")
+)
+
+func main() {
+	out := goyek.Output()
+
+	// change working directory to repo root
+	if err := os.Chdir(".."); err != nil {
+		fmt.Fprintln(out, err)
+		os.Exit(exitCodeInvalid)
+	}
+
+	goyek.SetDefault(all)
+
+	flag.CommandLine.SetOutput(out)
+	flag.Usage = usage
+	tasks, err := parseArgs(flag.CommandLine, os.Args[1:])
+	if err != nil {
+		fmt.Fprintln(out, err)
+		os.Exit(exitCodeInvalid)
+	}
+
+	goyek.UseExecutor(middleware.ReportFlow)
+
+	if *dryRun {
+		*v = true // needed to report the task status
+	}
+
+	if *dryRun {
+		goyek.Use(middleware.DryRun)
+	}
+	goyek.Use(middleware.ReportStatus)
+	if !*v {
+		goyek.Use(middleware.SilentNonFailed)
+	}
+	if *longRun > 0 {
+		goyek.Use(middleware.ReportLongRun(*longRun))
+	}
+
+	var opts []goyek.Option
+	if *noDeps {
+		opts = append(opts, goyek.NoDeps())
+	}
+	if *skip != "" {
+		skippedTasks := strings.Split(*skip, ",")
+		opts = append(opts, goyek.Skip(skippedTasks...))
+	}
+
+	goyek.SetUsage(usage)
+	goyek.Main(tasks, opts...)
+}
+
+func parseArgs(flags *flag.FlagSet, args []string) ([]string, error) {
+	tasks, flagArgs := goyek.SplitTasks(args)
+	if err := flags.Parse(flagArgs); err != nil {
+		return nil, err
+	}
+	if flags.NArg() > 0 {
+		return nil, fmt.Errorf("unexpected arguments: %v", flags.Args())
+	}
+	return tasks, nil
+}
+
+func usage() {
+	fmt.Println("Usage of build: [tasks] [flags]")
+	goyek.Print()
+	fmt.Println("Flags:")
+	flag.PrintDefaults()
+}
